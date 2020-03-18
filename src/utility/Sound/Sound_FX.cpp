@@ -102,7 +102,7 @@ void Sound_Handler_FX::update() {
 			generateSilence(_headP + maxSamples);
 		}
 
-		if (_headP == _maxHeadP) {
+		if (_headP == maxHeadP) {
 			// Reached end of cyclic buffer. Continue at the beginning.
 			_headP = (uint32_t *)parent_channel->buffer;
 		}
