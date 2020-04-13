@@ -227,7 +227,7 @@ int8_t Sound::play(Sound_Handler* handler, bool loop) {
 #endif // SOUND_CHANNELS
 }
 
-void Sound::play(const SongSpec* song, bool loop) {
+void Sound::playSong(const SongSpec* song, bool loop) {
 #if SOUND_ENABLE_MUSIC
 	musicHandler.play(song, loop);
 #endif
@@ -295,6 +295,12 @@ void Sound::stop(int8_t i) {
 		handlers[i] = 0;
 	}
 #endif // SOUND_CHANNELS
+}
+
+void Sound::stopSong() {
+#if SOUND_ENABLE_MUSIC
+	return musicHandler.stopSong();
+#endif // SOUND_ENABLE_MUSIC
 }
 
 int8_t Sound::playOK() {
@@ -378,6 +384,14 @@ bool Sound::isPlaying(int8_t i) {
 #else // SOUND_CHANNELS
 	return false;
 #endif // SOUND_CHANNELS
+}
+
+bool Sound::isSongPlaying() {
+#if SOUND_ENABLE_MUSIC
+	return musicHandler.isSongPlaying();
+#else // SOUND_ENABLE_MUSIC
+	return false;
+#endif // SOUND_ENABLE_MUSIC
 }
 
 void Sound::setVolume(uint8_t volume) {

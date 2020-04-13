@@ -119,12 +119,15 @@ class TuneGenerator {
 
 public:
     void setTuneSpec(const TuneSpec* tuneSpec);
+    void stop() { _note = nullptr; }
     bool isDone() { return _note == nullptr; }
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
     // the same buffer. This relies on an overarching orchestrator to clear the buffer values at
     // right moment.
+    //
+    // Note: it should only be invoked when isDone() returns false.
     //
     // Returns the number of samples added. It can less than the maximum when the tune ends.
     int addSamples(Sample* buf, int maxSamples);
@@ -175,12 +178,15 @@ class SongGenerator {
 
 public:
     void setSongSpec(const SongSpec* songSpec, bool loop);
+    void stop() { _pattern = nullptr; };
     bool isDone() { return _pattern == nullptr; }
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
     // the same buffer. This relies on an overarching orchestrator to clear the buffer values at
     // right moment.
+    //
+    // Note: it should only be invoked when isDone() returns false.
     //
     // Returns the number of samples added. It can less than the maximum when the song ends.
     int addSamples(Sample* buf, int maxSamples);
@@ -204,6 +210,12 @@ public:
 
     void play(const TuneSpec* tuneSpec);
     void play(const SongSpec* songSpec, bool loop);
+
+    bool isTunePlaying() { return !_tuneGenerator.isDone(); }
+    bool isSongPlaying() { return !_songGenerator.isDone(); }
+
+    void stopTune() { _tuneGenerator.stop(); }
+    void stopSong() { _songGenerator.stop(); }
 
     void update();
 

@@ -90,7 +90,8 @@ public:
 	};
 	
 	int8_t play(Sound_Handler* handler, bool loop = false);
-	void play(const SongSpec* song, bool loop = false);
+
+	void playSong(const SongSpec* song, bool loop = false);
 
 	void fx(const Sound_FX & fx);
 	void fx(const Sound_FX * const fx);
@@ -103,6 +104,7 @@ public:
 	int8_t playTick();
 	
 	bool isPlaying(int8_t i);
+	bool isSongPlaying();
 	
 	void update();
 	void mute();
@@ -113,6 +115,7 @@ public:
 	void stopEfxOnly();
 	
 	void stop(int8_t i);
+	void stopSong();
 	
 	void setVolume(uint8_t volume);
 	uint8_t getVolume();
