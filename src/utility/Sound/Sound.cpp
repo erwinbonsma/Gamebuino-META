@@ -257,7 +257,7 @@ void Sound::fx(const Sound_FX * const fx) {
 #endif // SOUND_ENABLE_FX
 }
 
-void fx(const TuneSpec* tune) {
+void Sound::fx(const TuneSpec* tune) {
 #if SOUND_ENABLE_MUSIC
 	musicHandler.play(tune);
 #endif

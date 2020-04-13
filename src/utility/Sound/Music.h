@@ -10,6 +10,8 @@
 #define MusicGeneration_h
 
 #include <stdint.h>
+#include "../../config/config.h"
+
 namespace Gamebuino_Meta {
 
 //--------------------------------------------------------------------------------------------------
@@ -117,6 +119,7 @@ class TuneGenerator {
 
 public:
     void setTuneSpec(const TuneSpec* tuneSpec);
+    bool isDone() { return _note == nullptr; }
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -172,6 +175,7 @@ class SongGenerator {
 
 public:
     void setSongSpec(const SongSpec* songSpec, bool loop);
+    bool isDone() { return _pattern == nullptr; }
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -188,7 +192,7 @@ public:
 class MusicHandler {
     int16_t _buffer[SOUND_MUSIC_BUFFERSIZE];
     int16_t* _readP;
-    int16_t* _writeP;
+    int16_t* _headP;
     int16_t* _endP;
     int16_t* _zeroP;
 
@@ -197,15 +201,15 @@ class MusicHandler {
 public:
     MusicHandler();
 
-    void update();
+    void play(const TuneSpec* tuneSpec);
 
-    void play(const TuneSpec* tuneSpec) { _tuneGenerator.setTuneSpec(tuneSpec); }
+    void update();
 
     uint16_t nextSample() {
         if (_readP == _endP) { _readP = _buffer; }
         return *_readP++;
     }
-}
+};
 
 } // Namespace
 
