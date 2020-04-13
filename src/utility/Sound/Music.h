@@ -197,17 +197,20 @@ class MusicHandler {
     int16_t* _zeroP;
 
     TuneGenerator _tuneGenerator;
+    SongGenerator _songGenerator;
 
 public:
     MusicHandler();
 
     void play(const TuneSpec* tuneSpec);
+    void play(const SongSpec* songSpec, bool loop);
 
     void update();
 
     uint16_t nextSample() {
-        if (_readP == _endP) { _readP = _buffer; }
-        return *_readP++;
+        uint16_t sample = *_readP;
+        if (++_readP == _endP) { _readP = _buffer; }
+        return sample;
     }
 };
 

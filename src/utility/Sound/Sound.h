@@ -90,6 +90,7 @@ public:
 	};
 	
 	int8_t play(Sound_Handler* handler, bool loop = false);
+	void play(const SongSpec* song, bool loop = false);
 
 	void fx(const Sound_FX & fx);
 	void fx(const Sound_FX * const fx);

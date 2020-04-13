@@ -227,6 +227,12 @@ int8_t Sound::play(Sound_Handler* handler, bool loop) {
 #endif // SOUND_CHANNELS
 }
 
+void Sound::play(const SongSpec* song, bool loop) {
+#if SOUND_ENABLE_MUSIC
+	musicHandler.play(song, loop);
+#endif
+}
+
 // Get optimized away if fx is not used
 uint32_t fx_sound_buffer[SOUND_FX_BUFFERSIZE/4];
 

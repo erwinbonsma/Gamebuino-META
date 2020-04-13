@@ -636,28 +636,45 @@ void MusicHandler::play(const TuneSpec* tuneSpec) {
     _zeroP = nullptr;
 }
 
+void MusicHandler::play(const SongSpec* songSpec, bool loop) {
+    _songGenerator.setSongSpec(songSpec, loop);
+    _zeroP = nullptr;
+}
+
 void MusicHandler::update() {
     int16_t* targetHeadP = _readP; // Copy as its continuously changing
 
     while (_headP != targetHeadP) {
         // The maximum number of samples that can be added without wrapping
         int maxSamples = (_headP < targetHeadP) ? targetHeadP - _headP : _endP - _headP;
+        bool addedZeros = false;
 
         if (!_tuneGenerator.isDone()) {
             addZeros(_headP, maxSamples);
+            addedZeros = true;
             _tuneGenerator.addSamples(_headP, maxSamples);
-        } else {
+        }
+        if (!_songGenerator.isDone()) {
+            if (!addedZeros) {
+                addZeros(_headP, maxSamples);
+                addedZeros = true;
+            }
+            _songGenerator.addSamples(_headP, maxSamples);
+        }
+        if (!addedZeros) {
             if (_zeroP == nullptr) {
                 _zeroP = _headP;
             } else if (_zeroP == _headP) {
-                // Buffer contains only zeroes. Nothing needs doing anymore
-                return;
+                // Buffer contains only zeroes. No need to set any.
+                addedZeros = true;
+                _zeroP += maxSamples; // Move it headP
             } else if (_zeroP > _headP) {
                 // Stop once buffer contains only zeroes
                 maxSamples = min(maxSamples, _zeroP - _headP);
             }
-            SerialUSB.printf("adding %d zeros\n", maxSamples);
-            addZeros(_headP, maxSamples);
+            if (!addedZeros) {
+                addZeros(_headP, maxSamples);
+            }
         }
         _headP += maxSamples;
 
