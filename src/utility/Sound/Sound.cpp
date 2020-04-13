@@ -59,8 +59,11 @@ bool muted = false;
 #if SOUND_CHANNELS > 0
 Sound_Channel channels[SOUND_CHANNELS];
 Sound_Handler* handlers[SOUND_CHANNELS];
+#endif  // SOUND_CHANNELS
 
+#if SOUND_ENABLE_FX
 FX_Channel fx_channel = { 0 };
+#endif  // SOUND_ENABLE_FX
 
 bool tcIsSyncing() {
 	return TC5->COUNT16.STATUS.reg & TC_STATUS_SYNCBUSY;
@@ -115,6 +118,7 @@ void tcConfigure(uint32_t sampleRate) {
 	while (tcIsSyncing());
 }
 
+#if SOUND_CHANNELS > 0
 int8_t findEmptyChannel() {
 	for (uint8_t i = 0; i < SOUND_CHANNELS; i++) {
 		if (!channels[i].use) {
@@ -127,7 +131,7 @@ int8_t findEmptyChannel() {
 	}
 	return -1;
 }
-#endif
+#endif  // SOUND_CHANNELS
 
 Sound_Handler::Sound_Handler(Sound_Channel* _channel) {
 	channel = _channel;
@@ -223,7 +227,7 @@ int8_t Sound::play(Sound_Handler* handler, bool loop) {
 uint32_t fx_sound_buffer[SOUND_FX_BUFFERSIZE/4];
 
 void init_fx_channel() {
-#if SOUND_CHANNELS > 0
+#if SOUND_ENABLE_FX
 	if (fx_channel.handler == nullptr){
 		fx_channel.size = SOUND_FX_BUFFERSIZE;
 		fx_channel.buffer = (int8_t*)fx_sound_buffer;
@@ -231,22 +235,22 @@ void init_fx_channel() {
 		fx_channel.index = 0;
 		fx_channel.handler = new Sound_Handler_FX(&fx_channel);
 	}
-#endif // SOUND_CHANNELS
+#endif // SOUND_ENABLE_FX
 }
 
 void Sound::fx(const Sound_FX & fx) {
-#if SOUND_CHANNELS > 0
+#if SOUND_ENABLE_FX
 	init_fx_channel();
 	fx_channel.handler->play(fx);
-#endif // SOUND_CHANNELS
+#endif // SOUND_ENABLE_FX
 }
 
 
 void Sound::fx(const Sound_FX * const fx) {
-#if SOUND_CHANNELS > 0
+#if SOUND_ENABLE_FX
 	init_fx_channel();
 	fx_channel.handler->play(fx,0);
-#endif // SOUND_CHANNELS
+#endif // SOUND_ENABLE_FX
 }
 
 
@@ -318,11 +322,12 @@ void Sound::update() {
 			handlers[i] = 0;
 		}
 	}
-
+#endif // SOUND_CHANNELS
+#if SOUND_ENABLE_FX
 	if (fx_channel.handler) {
 		fx_channel.handler->update();
 	}
-#endif // SOUND_CHANNELS
+#endif // SOUND_ENABLE_FX
 }
 
 void Sound::mute() {
@@ -375,8 +380,6 @@ uint32_t Sound::getPos(int8_t i) {
 #endif // SOUND_CHANNELS
 }
 
-#if SOUND_CHANNELS > 0
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -390,6 +393,7 @@ void Audio_Handler (void) {
 		return;
 	}
 	int16_t output = 0;
+#if SOUND_CHANNELS > 0
 	for (uint8_t i = 0; i < SOUND_CHANNELS; i++) {
 		if (channels[i].use) {
 			switch (channels[i].type) {
@@ -425,7 +429,8 @@ void Audio_Handler (void) {
 			}
 		}
 	}
-
+#endif // SOUND_CHANNELS
+#if SOUND_ENABLE_FX
 	if (fx_channel.handler != nullptr) {
 		output += fx_channel.buffer[fx_channel.index];
 		fx_channel.index++;
@@ -433,6 +438,7 @@ void Audio_Handler (void) {
 			fx_channel.index = 0;
 		}
 	}
+#endif // SOUND_ENABLE_FX
 
 	if (output) {
 		//we multiply by 4 to use the whole 0..1024 DAC range even with 8-bit 0..255 waves
@@ -483,14 +489,10 @@ void dacConfigure(void) {
 	analogWriteResolution(10);
 }
 
-#endif // SOUND_CHANNELS
-
 void Sound::begin() {
-#if SOUND_CHANNELS > 0
 	dacConfigure();
 	tcConfigure(SOUND_FREQ);
 	tcStart();
-#endif
 }
 
 } // Gamebuino_Meta
