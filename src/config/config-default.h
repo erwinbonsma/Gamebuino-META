@@ -122,6 +122,14 @@
 #define SOUND_ENABLE_FX 1
 #endif
 
+#ifndef SOUND_ENABLE_MUSIC
+#define SOUND_ENABLE_MUSIC 1
+#endif
+
+#ifndef SOUND_MUSIC_BUFFERSIZE
+#define SOUND_MUSIC_BUFFERSIZE SOUND_FX_BUFFERSIZE
+#endif
+
 ///////////////
 // image defines
 ///////////////

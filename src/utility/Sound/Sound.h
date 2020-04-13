@@ -26,6 +26,7 @@ Authors:
 
 #include "../../config/config.h"
 #include "Sound_FX.h"
+#include "Music.h"
 
 namespace Gamebuino_Meta {
 
@@ -92,6 +93,8 @@ public:
 
 	void fx(const Sound_FX & fx);
 	void fx(const Sound_FX * const fx);
+
+	void fx(const TuneSpec* tune);
 
 	int8_t tone(uint32_t frequency, int32_t duration = 0);
 	int8_t playOK();

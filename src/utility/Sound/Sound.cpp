@@ -65,6 +65,10 @@ Sound_Handler* handlers[SOUND_CHANNELS];
 FX_Channel fx_channel = { 0 };
 #endif  // SOUND_ENABLE_FX
 
+#if SOUND_ENABLE_MUSIC
+MusicHandler musicHandler;
+#endif
+
 bool tcIsSyncing() {
 	return TC5->COUNT16.STATUS.reg & TC_STATUS_SYNCBUSY;
 }
@@ -253,6 +257,12 @@ void Sound::fx(const Sound_FX * const fx) {
 #endif // SOUND_ENABLE_FX
 }
 
+void fx(const TuneSpec* tune) {
+#if SOUND_ENABLE_MUSIC
+	musicHandler.play(tune);
+#endif
+}
+
 
 int8_t Sound::tone(uint32_t frequency, int32_t duration) {
 #if SOUND_CHANNELS > 0
@@ -328,6 +338,9 @@ void Sound::update() {
 		fx_channel.handler->update();
 	}
 #endif // SOUND_ENABLE_FX
+#if SOUND_ENABLE_MUSIC
+	musicHandler.update();
+#endif
 }
 
 void Sound::mute() {
@@ -439,6 +452,9 @@ void Audio_Handler (void) {
 		}
 	}
 #endif // SOUND_ENABLE_FX
+#if SOUND_ENABLE_MUSIC
+	output += musicHandler.nextSample();
+#endif // SOUND_ENABLE_MUSIC
 
 	if (output) {
 		//we multiply by 4 to use the whole 0..1024 DAC range even with 8-bit 0..255 waves
