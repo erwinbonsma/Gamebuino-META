@@ -1,18 +1,22 @@
 //
-//  MusicGeneration.h
+//  Music.h
 //  MusicGB
 //
 //  Created by Erwin on 04/04/2020.
 //  Copyright © 2020 Erwin. All rights reserved.
 //
 
-#ifndef MusicGeneration_h
-#define MusicGeneration_h
+#ifndef Music_h
+#define Music_h
 
 #include <stdint.h>
-#include "../../config/config.h"
 
-namespace Gamebuino_Meta {
+#ifdef STANDALONE
+  #define SOUND_MUSIC_BUFFERSIZE 1024
+#else
+  #include "../../config/config.h"
+  namespace Gamebuino_Meta {
+#endif
 
 //--------------------------------------------------------------------------------------------------
 // Tune Generation
@@ -88,12 +92,13 @@ class TuneGenerator {
     const WaveTable* _waveTable;
     const NoteSpec* _arpeggioNote;
     int32_t _waveIndex, _maxWaveIndex;
+    int32_t _indexNoiseDelta, _maxWaveIndexOrig; // Used for NOISE
     int32_t _indexDelta, _indexDeltaDelta;
     int32_t _vibratoDelta, _vibratoDeltaDelta;
     int16_t _sampleIndex, _endMainIndex;
     int16_t _volume, _volumeDelta;
     int16_t _blendSample, _blendDelta;
-    uint8_t _noiseShift;
+    int16_t _noiseLfsr = 1;
 
     void inline setSamplesPerNote() {
         _samplesPerNote = (_tuneSpec->noteDuration * SAMPLES_PER_TICK) << (2 - SAMPLERATE_SHIFT);
@@ -113,6 +118,7 @@ class TuneGenerator {
     void moveToNextNote();
 
     void addMainSamples(Sample* &curP, Sample* endP);
+    void addMainSamplesNoise(Sample* &curP, Sample* endP);
     void addMainSamplesSilence(Sample* &curP, Sample* endP);
     void addMainSamplesVibrato(Sample* &curP, Sample* endP);
     void addBlendSamples(Sample* &curP, Sample* endP);
@@ -226,6 +232,8 @@ public:
     }
 };
 
+#ifndef STANDALONE
 } // Namespace
+#endif
 
-#endif /* TuneGenerator_h */
+#endif /* Music_h */
