@@ -105,14 +105,12 @@ struct NoteSpec {
     Effect fx;
 };
 
-const NoteSpec SILENCE = NoteSpec {
-    .note = Note::C4, .vol = 0, .wav = WaveForm::NONE, .fx = Effect::NONE
-};
+#define SILENCE NoteSpec { .note = Note::C4, .vol = 0, .wav = WaveForm::NONE, .fx = Effect::NONE }
 
 struct TuneSpec {
     uint8_t noteDuration;        // in "ticks". [1..64]
     uint16_t loopStart, numNotes;
-    const NoteSpec* notes;
+    const NoteSpec *const notes;
 
     int lengthInTicks() const;
 };
@@ -120,7 +118,7 @@ struct TuneSpec {
 struct WaveTable {
     const uint16_t numSamples;
     const uint8_t shift;
-    const int8_t* samples;
+    const int8_t *const samples;
 };
 
 class TuneGenerator;
@@ -213,7 +211,7 @@ public:
 
 struct PatternSpec {
     uint8_t numTunes;
-    const TuneSpec** tunes;
+    const TuneSpec *const *const tunes;
 
     int lengthInTicks() const;
 };
@@ -243,7 +241,7 @@ public:
 
 struct SongSpec {
     uint8_t loopStart, numPatterns;
-    const PatternSpec** patterns;
+    const PatternSpec *const *const patterns;
 
     int lengthInSeconds() const;
     int lengthInTicks() const;
@@ -252,7 +250,7 @@ struct SongSpec {
 class SongGenerator {
     const SongSpec* _songSpec;
     PatternGenerator _patternGenerator;
-    const PatternSpec** _pattern;
+    const PatternSpec *const * _pattern;
     bool _loop;
 
     void startPattern(bool isFirst);
