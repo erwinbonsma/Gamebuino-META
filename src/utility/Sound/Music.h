@@ -43,11 +43,29 @@
 // Number of samples when sample rate is 11025 Hz
 constexpr uint8_t SAMPLES_PER_TICK = 90;
 
+constexpr uint8_t BLEND_SHIFT = 4;
+constexpr uint8_t NUM_BLEND_SAMPLES = 1 << BLEND_SHIFT;
+
 typedef int16_t Sample;
 
 constexpr int numNotes = 12;
-enum class Note {
-    C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B
+enum class Note : int8_t {
+    C0  = 0x00, Cs0 = 0x01, D0  = 0x02, Ds0 = 0x03, E0  = 0x04, F0  = 0x05,
+    Fs0 = 0x06, G0  = 0x07, Gs0 = 0x08, A0  = 0x09, As0 = 0x0a, B0  = 0x0b,
+    C1  = 0x10, Cs1 = 0x11, D1  = 0x12, Ds1 = 0x13, E1  = 0x14, F1  = 0x15,
+    Fs1 = 0x16, G1  = 0x17, Gs1 = 0x18, A1  = 0x19, As1 = 0x1a, B1  = 0x1b,
+    C2  = 0x20, Cs2 = 0x21, D2  = 0x22, Ds2 = 0x23, E2  = 0x24, F2  = 0x25,
+    Fs2 = 0x26, G2  = 0x27, Gs2 = 0x28, A2  = 0x29, As2 = 0x2a, B2  = 0x2b,
+    C3  = 0x30, Cs3 = 0x31, D3  = 0x32, Ds3 = 0x33, E3  = 0x34, F3  = 0x35,
+    Fs3 = 0x36, G3  = 0x37, Gs3 = 0x38, A3  = 0x39, As3 = 0x3a, B3  = 0x3b,
+    C4  = 0x40, Cs4 = 0x41, D4  = 0x42, Ds4 = 0x43, E4  = 0x44, F4  = 0x45,
+    Fs4 = 0x46, G4  = 0x47, Gs4 = 0x48, A4  = 0x49, As4 = 0x4a, B4  = 0x4b,
+    C5  = 0x50, Cs5 = 0x51, D5  = 0x52, Ds5 = 0x53, E5  = 0x54, F5  = 0x55,
+    Fs5 = 0x56, G5  = 0x57, Gs5 = 0x58, A5  = 0x59, As5 = 0x5a, B5  = 0x5b,
+    C6  = 0x60, Cs6 = 0x61, D6  = 0x62, Ds6 = 0x63, E6  = 0x64, F6  = 0x65,
+    Fs6 = 0x66, G6  = 0x67, Gs6 = 0x68, A6  = 0x69, As6 = 0x6a, B6  = 0x6b,
+    C7  = 0x70, Cs7 = 0x71, D7  = 0x72, Ds7 = 0x73, E7  = 0x74, F7  = 0x75,
+    Fs7 = 0x76, G7  = 0x77, Gs7 = 0x78, A7  = 0x79, As7 = 0x7a, B7  = 0x7b
 };
 
 enum class WaveForm : int8_t {
@@ -75,20 +93,21 @@ enum class Effect : int8_t {
 
 struct NoteSpec {
     Note note;
-    uint8_t oct; // [2..6]
     uint8_t vol; // [0..8]
     WaveForm wav;
     Effect fx;
 };
 
 const NoteSpec SILENCE = NoteSpec {
-    .note = Note::C, .oct = 4, .vol = 0, .wav = WaveForm::NONE, .fx = Effect::NONE
+    .note = Note::C4, .vol = 0, .wav = WaveForm::NONE, .fx = Effect::NONE
 };
 
 struct TuneSpec {
     uint8_t noteDuration;        // in "ticks". [1..64]
-    uint8_t loopStart, numNotes;
+    uint16_t loopStart, numNotes;
     const NoteSpec* notes;
+
+    int lengthInTicks() const;
 };
 
 struct WaveTable {
@@ -97,39 +116,66 @@ struct WaveTable {
     const int8_t* samples;
 };
 
+class TuneGenerator;
+typedef void (TuneGenerator::*SampleGeneratorFun)(Sample* &curP, Sample* endP);
+
 class TuneGenerator {
     const TuneSpec* _tuneSpec;
     int16_t _samplesPerNote;
 
 // Current note
     const NoteSpec* _note;
-    const WaveTable* _waveTable;
     const NoteSpec* _arpeggioNote;
+    const WaveTable* _waveTable;
     int32_t _waveIndex, _maxWaveIndex;
-    int32_t _indexNoiseDelta, _maxWaveIndexOrig; // Used for NOISE
     int32_t _indexDelta, _indexDeltaDelta;
-    int32_t _vibratoDelta, _vibratoDeltaDelta;
-    int16_t _sampleIndex, _endMainIndex;
     int32_t _volume, _volumeDelta;
-    int16_t _blendSample, _blendDelta;
+// Let-Vibrato and Noise related fields share same memory, as they are never used together.
+union {
+    int32_t _vibratoDelta;
+    int32_t _indexNoiseDelta;
+};
+union {
+    int32_t _vibratoDeltaDelta;
+    int32_t _maxWaveIndexOrig; // Used for NOISE
+};
+    int16_t _sampleIndex;
+union {
+    int16_t _pendingArpeggioSamples;
+    int16_t _noteIndex; // Used when tune contains only SILENCE
+};
     int16_t _noiseLfsr = 1;
+
+    SampleGeneratorFun _sampleGeneratorFun;
+
+// Blending
+    Sample _blendBufOut[NUM_BLEND_SAMPLES], _blendBufIn[NUM_BLEND_SAMPLES];
+    uint8_t _numBlendSamples;
 
     void inline setSamplesPerNote() {
         _samplesPerNote = (_tuneSpec->noteDuration * SAMPLES_PER_TICK) << SAMPLERATE_SHIFT;
     }
 
-    int inline arpeggioFactor(const NoteSpec* note) const {
-        // Assumes effect is ARPEGGIO or ARPEGGIO_FAST
-        return (note->fx == Effect::ARPEGGIO_FAST ? 3 : 2) - (_tuneSpec->noteDuration <= 8 ? 1 : 0);
+    const NoteSpec* firstArpeggioNote() const {
+        return _arpeggioNote - (_arpeggioNote - _tuneSpec->notes) % 4;
     }
-    bool isFirstArpeggioNote() const;
-    bool isLastArpeggioNote() const;
+    const NoteSpec* lastArpeggioNote() const {
+        return _arpeggioNote - (_arpeggioNote - _tuneSpec->notes) % 4 + 3;
+    }
+
+    const WaveTable* waveTableForWaveForm(WaveForm waveForm) const;
+
+    void startArpeggio();
+    void exitArpeggio();
 
     void startNote();
 
     const NoteSpec* peekPrevNote() const;
     const NoteSpec* peekNextNote() const;
     void moveToNextNote();
+
+    void createOutgoingBlendSamplesIfNeeded();
+    void createIncomingBlendSamplesIfNeeded();
 
     void addMainSamples(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
     void addMainSamplesNoise(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
@@ -138,9 +184,11 @@ class TuneGenerator {
     void addBlendSamples(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
 
 public:
-    void setTuneSpec(const TuneSpec* tuneSpec);
+    void setTuneSpec(const TuneSpec* tuneSpec, bool isFirst = true);
     void stop() { _note = nullptr; }
     bool isDone() { return _note == nullptr; }
+
+    int intensity();
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -159,6 +207,8 @@ public:
 struct PatternSpec {
     uint8_t numTunes;
     const TuneSpec** tunes;
+
+    int lengthInTicks() const;
 };
 
 constexpr int MAX_TUNES_IN_PATTERN = 4;
@@ -168,7 +218,9 @@ class PatternGenerator {
     TuneGenerator _tuneGens[MAX_TUNES_IN_PATTERN];
 
 public:
-    void setPatternSpec(const PatternSpec* patternSpec);
+    void setPatternSpec(const PatternSpec* patternSpec, bool isFirst = true);
+
+    int intensity();
 
     // Adds samples for the pattern to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -185,6 +237,9 @@ public:
 struct SongSpec {
     uint8_t loopStart, numPatterns;
     const PatternSpec** patterns;
+
+    int lengthInSeconds() const;
+    int lengthInTicks() const;
 };
 
 class SongGenerator {
@@ -193,13 +248,15 @@ class SongGenerator {
     const PatternSpec** _pattern;
     bool _loop;
 
-    void startPattern();
+    void startPattern(bool isFirst);
     void moveToNextPattern();
 
 public:
     void setSongSpec(const SongSpec* songSpec, bool loop);
     void stop() { _pattern = nullptr; };
     bool isDone() { return _pattern == nullptr; }
+
+    int intensity();
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -237,6 +294,8 @@ public:
 
     void stopTune() { _tuneGenerator.stop(); }
     void stopSong() { _songGenerator.stop(); }
+
+    int intensity();
 
     void update();
 

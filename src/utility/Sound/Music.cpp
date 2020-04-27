@@ -10,8 +10,11 @@
 
 #ifdef STANDALONE
   #include <cstdlib>
+  #include <stdio.h>
+  #include <assert.h>
   #define min(x,y) ((x)<(y)?(x):(y))
 #else
+  #define assert(condition)
   namespace Gamebuino_Meta {
 #endif
 #ifdef UNDEFINED
@@ -20,7 +23,7 @@
 
 // Periods in samples for Octave = 0 and Sample rate = 11025, and shifted SPEC_PERIOD_SHIFT bits
 // (for maximum accuracy).
-const int16_t notePeriod[numNotes] = {
+const int16_t notePeriodLookup[numNotes] = {
     21576, 20365, 19222, 18143, 17125, 16164, 15256, 14400, 13592, 12829, 12109, 11429
 };
 constexpr uint8_t SPEC_PERIOD_SHIFT = 5;
@@ -281,59 +284,79 @@ const WaveTable noiseWave = WaveTable {
     .samples = noiseWaveSamples
 };
 
-void TuneGenerator::setTuneSpec(const TuneSpec* tuneSpec) {
+const WaveTable* waveTableLookup[9] = {
+    &triangleWave,
+    &tiltedSawWave,
+    &sawWave,
+    &squareWave,
+    &pulseWave,
+    &organWave,
+    &noiseWave,
+    &organWave, // Also use organ for unsupported PHASER
+    nullptr
+};
+
+#define CALL_MEMBER_FN(object, ptrToMember)  ((object).*(ptrToMember))
+
+inline void clearBuffer(int16_t* buf, int num) {
+    // Note: implementation assumes that num > 0
+    int16_t* endP = buf + num;
+    do {
+        *buf = 0;
+    } while (++buf != endP);
+}
+
+inline int notePeriod(const NoteSpec* note) {
+    return ((int)notePeriodLookup[(int)note->note & 0x0f]) << (MAX_OCTAVE - ((int)note->note >> 4));
+}
+
+int TuneSpec::lengthInTicks() const {
+    return numNotes * noteDuration;
+}
+
+void TuneGenerator::setTuneSpec(const TuneSpec* tuneSpec, bool isFirst) {
     _tuneSpec = tuneSpec;
 
-    _note = _tuneSpec->notes;
-    _arpeggioNote = nullptr;
     setSamplesPerNote();
 
+    if (_tuneSpec->notes == nullptr) {
+        // The tune is a silent tune. It can be used to control the length of a pattern, when all
+        // the other tunes are looping.
+        _noteIndex = 0;
+        _note = &SILENCE; // Make it non-null, as it's used to signal tune termination
+    } else {
+        _note = _tuneSpec->notes;
+    }
+
+    _arpeggioNote = nullptr;
     _waveTable = nullptr;
     startNote();
-}
-
-bool TuneGenerator::isFirstArpeggioNote() const {
-    // Assumes we are in Arpeggio mode (i.e. _arpeggioNote is not null)
-    int numNotes = 1 << arpeggioFactor(_arpeggioNote);
-    const NoteSpec* firstArpNote =
-        _arpeggioNote - (_arpeggioNote - _tuneSpec->notes) % numNotes;
-
-    return _note == firstArpNote;
-}
-
-bool TuneGenerator::isLastArpeggioNote() const {
-    // Assumes we are in Arpeggio mode (i.e. _arpeggioNote is not null)
-    int numNotes = 1 << arpeggioFactor(_arpeggioNote);
-    const NoteSpec* lastArpNote =
-        _arpeggioNote - (_arpeggioNote - _tuneSpec->notes) % numNotes + numNotes - 1;
-
-    return _note == lastArpNote;
+    if (isFirst) {
+        _numBlendSamples = 0;
+    } else {
+        createIncomingBlendSamplesIfNeeded();
+    }
 }
 
 const NoteSpec* TuneGenerator::peekPrevNote() const {
-    if (_note == _tuneSpec->notes) {
-        return nullptr;
+    assert(_arpeggioNote == nullptr);
+
+    if (_tuneSpec->notes == nullptr) {
+        return (_noteIndex > 0) ? _note :  nullptr;
     }
 
-    if (_arpeggioNote != nullptr && isFirstArpeggioNote()) {
-        if (_arpeggioNote == _tuneSpec->notes) {
-            return nullptr;
-        } else {
-            return _arpeggioNote - 1;
-        }
-    } else {
-        return _note - 1;
-    }
-
+    return (_note == _tuneSpec->notes) ? nullptr : _note - 1;
 }
 
 const NoteSpec* TuneGenerator::peekNextNote() const {
+    assert(_arpeggioNote == nullptr);
+
+    if (_tuneSpec->notes == nullptr) {
+        return ((_noteIndex + 1) < _tuneSpec->numNotes) ? _note : nullptr;
+    }
+
     const NoteSpec* nextNote = _note + 1;
     const NoteSpec* lastNote = _tuneSpec->notes + _tuneSpec->numNotes;
-
-    if (_arpeggioNote != nullptr && isLastArpeggioNote()) {
-        nextNote = _arpeggioNote + 1;
-    }
 
     if (nextNote == lastNote) {
         const NoteSpec* resumeNote = _tuneSpec->notes + _tuneSpec->loopStart;
@@ -348,80 +371,108 @@ const NoteSpec* TuneGenerator::peekNextNote() const {
 }
 
 void TuneGenerator::moveToNextNote() {
-    if (_arpeggioNote != nullptr && isLastArpeggioNote()) {
-        // Exit Arpeggio mode
-        _note = _arpeggioNote;
-        _arpeggioNote = nullptr;
-        setSamplesPerNote();
+    if (_arpeggioNote != nullptr) {
+        if (_pendingArpeggioSamples > 0) {
+            if (_note == lastArpeggioNote()) {
+                _note = firstArpeggioNote();
+                return;
+            } else {
+                _note++;
+                return;
+            }
+        } else {
+            exitArpeggio();
+        }
     }
 
     _note = peekNextNote();
+
+    if (_tuneSpec->notes == nullptr) {
+        ++_noteIndex;
+    }
+}
+
+void TuneGenerator::startArpeggio() {
+    // Enter Arpeggio mode
+    _arpeggioNote = _note;
+
+    _note -= (_note - _tuneSpec->notes) % 4;
+    _pendingArpeggioSamples = _samplesPerNote;
+
+    int noteDuration = _arpeggioNote->fx == Effect::ARPEGGIO ? 8 : 4;
+    if (_tuneSpec->noteDuration <= 8) {
+        noteDuration >>= 1;
+    }
+    _samplesPerNote = (noteDuration * SAMPLES_PER_TICK) << SAMPLERATE_SHIFT;
+
+    _waveTable = waveTableLookup[(int)_arpeggioNote->wav];
+    _maxWaveIndex = _waveTable->numSamples << _waveTable->shift;
+
+    if (_arpeggioNote->wav == WaveForm::NOISE) {
+        _sampleGeneratorFun = &TuneGenerator::addMainSamplesNoise;
+    } else {
+        _sampleGeneratorFun = &TuneGenerator::addMainSamples;
+    }
+
+    _volume = _arpeggioNote->vol << VOLUME_SHIFT;
+    _volumeDelta = 0;
+}
+
+void TuneGenerator::exitArpeggio() {
+    assert(_arpeggioNote != nullptr);
+    assert(_pendingArpeggioSamples == 0);
+
+    // Exit Arpeggio mode
+    _note = _arpeggioNote;
+    _arpeggioNote = nullptr;
+    setSamplesPerNote();
 }
 
 void TuneGenerator::startNote() {
-    if (
-        (_note->fx == Effect::ARPEGGIO || _note->fx == Effect::ARPEGGIO_FAST) &&
-        _arpeggioNote == nullptr
-    ) {
-        // Enter Arpeggio mode
-        _arpeggioNote = _note;
-        int factor = arpeggioFactor(_arpeggioNote);
-        _note -= (_note - _tuneSpec->notes) % (1 << factor);
-        _samplesPerNote >>= factor;
-    }
-
     _sampleIndex = 0;
 
-    const WaveTable* prevWaveTable = _waveTable;
-    switch (_note->wav) {
-        case WaveForm::TRIANGLE:
-            _waveTable = &triangleWave; break;
-        case WaveForm::NOISE:
-            _waveTable = &noiseWave; break;
-        case WaveForm::TILTED_SAW:
-            _waveTable = &tiltedSawWave; break;
-        case WaveForm::SAW:
-            _waveTable = &sawWave; break;
-        case WaveForm::SQUARE:
-            _waveTable = &squareWave; break;
-        case WaveForm::PULSE:
-            _waveTable = &pulseWave; break;
-        case WaveForm::PHASER: // Unsupported. Use ORGAN instead
-        case WaveForm::ORGAN:
-            _waveTable = &organWave; break;
-        case WaveForm::NONE:
-            _waveTable = nullptr;
-            _endMainIndex = _samplesPerNote;
-            return;
-    }
-    if (_waveTable != prevWaveTable) {
-        _waveIndex = 0;
-    }
-    _maxWaveIndex = _waveTable->numSamples << _waveTable->shift;
+    if (_arpeggioNote == nullptr) {
+        if (_note->fx == Effect::ARPEGGIO || _note->fx == Effect::ARPEGGIO_FAST) {
+            startArpeggio();
+        } else {
+            // Set wave
+            const WaveTable* prevWaveTable = _waveTable;
+            _waveTable = waveTableLookup[(int)_note->wav];
+            if (_waveTable == nullptr) {
+                _sampleGeneratorFun = &TuneGenerator::addMainSamplesSilence;
+                return;
+            }
 
-    const NoteSpec* nxtNote = peekNextNote();
-    if (nxtNote == nullptr || nxtNote->wav != _note->wav) {
-        // Blend note to avoid transition artifacts
-        _endMainIndex = _samplesPerNote - _note->vol * 2;
-    } else {
-        _endMainIndex = _samplesPerNote;
+            if (_waveTable != prevWaveTable) {
+                _waveIndex = 0;
+            }
+            _maxWaveIndex = _waveTable->numSamples << _waveTable->shift;
+
+            _indexNoiseDelta = 0;
+            if (_note->wav == WaveForm::NOISE) {
+                _maxWaveIndexOrig = _maxWaveIndex;
+                _maxWaveIndex >>= 2;
+            }
+
+            // Set volume
+            _volume = _note->vol << VOLUME_SHIFT;
+            _volumeDelta = 0;
+        }
     }
 
-    int period = ((int)notePeriod[(int)_note->note]) << (MAX_OCTAVE - _note->oct);
-
+    // Ensure note plays at desired frequency
     _indexDelta = (
-        (_waveTable->numSamples << _waveTable->shift) / period
+        (_waveTable->numSamples << _waveTable->shift) / notePeriod(_note)
     ) << (PERIOD_SHIFT - SAMPLERATE_SHIFT);
     _indexDeltaDelta = 0;
 
-    _indexNoiseDelta = 0;
-    if (_note->wav == WaveForm::NOISE) {
-        _maxWaveIndexOrig = _maxWaveIndex;
-        _maxWaveIndex >>= 2;
-    }
+    if (_arpeggioNote != nullptr) {
+        _samplesPerNote = min(_samplesPerNote, _pendingArpeggioSamples);
+        _pendingArpeggioSamples -= _samplesPerNote; // Update beforehand
 
-    _volume = _note->vol << VOLUME_SHIFT;
-    _volumeDelta = 0;
+        // Nothing more needs doing. Effects don't apply.
+        return;
+    }
 
     switch (_note->fx) {
         case Effect::FADE_IN:
@@ -432,50 +483,65 @@ void TuneGenerator::startNote() {
             _volumeDelta = -(_volume / _samplesPerNote);
             break;
         case Effect::SLIDE: {
-                const NoteSpec* prvNote = peekPrevNote();
-                if (prvNote != nullptr) {
-                    // Slide from previous volume to own
-                    int prvVolume = (prvNote->vol << VOLUME_SHIFT);
-                    _volumeDelta = (_volume - prvVolume) / _samplesPerNote;
-                    _volume = prvVolume;
+            const NoteSpec* prvNote = peekPrevNote();
 
-                    // Slide from previous frequency to own
-                    int prvPeriod = notePeriod[(int)prvNote->note] << (MAX_OCTAVE - prvNote->oct);
-                    int prvIndexDelta = (
-                        (_waveTable->numSamples << _waveTable->shift) / prvPeriod
-                    ) << (PERIOD_SHIFT - SAMPLERATE_SHIFT);
-                    _indexDeltaDelta = (_indexDelta - prvIndexDelta) / _samplesPerNote;
-                    _indexDelta = prvIndexDelta;
-                }
+            if (prvNote != nullptr) {
+                // Slide from previous volume to own
+                int prvVolume = (prvNote->vol << VOLUME_SHIFT);
+                _volumeDelta = (_volume - prvVolume) / _samplesPerNote;
+                _volume = prvVolume;
+
+                // Slide from previous frequency to own
+                int prvIndexDelta = (
+                    (_waveTable->numSamples << _waveTable->shift) / notePeriod(prvNote)
+                ) << (PERIOD_SHIFT - SAMPLERATE_SHIFT);
+                _indexDeltaDelta = (_indexDelta - prvIndexDelta) / _samplesPerNote;
+                _indexDelta = prvIndexDelta;
             }
+
             break;
+        }
         case Effect::ARPEGGIO:
         case Effect::ARPEGGIO_FAST:
-            // Ignore (as we are already playing note at Arpeggio speed when we reach this point)
+            assert(false);
             break;
 
         case Effect::DROP: {
-                int nxtIndexDelta = _indexDelta >> 1;
-                _indexDeltaDelta = (nxtIndexDelta - _indexDelta) / _samplesPerNote;
-            }
+            int nxtIndexDelta = _indexDelta >> 1;
+            _indexDeltaDelta = (nxtIndexDelta - _indexDelta) / _samplesPerNote;
+
             break;
+        }
         case Effect::VIBRATO: {
             const NoteSpec* prevNote = peekPrevNote();
-            if (prevNote == nullptr || prevNote->fx != Effect::VIBRATO) {
+            if (
+                (prevNote == nullptr || prevNote->fx != Effect::VIBRATO) &&
+                // Vibrato is not applied on NOISE and should not overwrite shared Noise values
+                _note->wav != WaveForm::NOISE
+            ) {
                 _vibratoDelta = 0;
                 // Note: The order of operations matters to avoid overflows during calculation
                 _vibratoDeltaDelta = _indexDelta / (
                     VIBRATO_META_PERIOD * (_maxWaveIndex / _indexDelta)
                 );
             }
+
+            break;
         }
         case Effect::NONE:
             break;
     }
+
+    if (_note->wav == WaveForm::NOISE) {
+        _sampleGeneratorFun = &TuneGenerator::addMainSamplesNoise;
+    } else if (_note->fx == Effect::VIBRATO) {
+        _sampleGeneratorFun = &TuneGenerator::addMainSamplesVibrato;
+    } else {
+        _sampleGeneratorFun = &TuneGenerator::addMainSamples;
+    }
 }
 
 void TuneGenerator::addMainSamples(Sample* &curP, Sample* endP) {
-    int16_t amplifiedSample = 0;
     int shift = _waveTable->shift;
     const int8_t* samples = _waveTable->samples;
 
@@ -488,16 +554,14 @@ void TuneGenerator::addMainSamples(Sample* &curP, Sample* endP) {
         }
         _indexDelta += _indexDeltaDelta;
 
-        amplifiedSample = sample * (int8_t)(_volume >> 24);
+        int16_t amplifiedSample = sample * (int8_t)(_volume >> 24);
         //printf("idx=%d %d\n", _waveIndex >> shift, amplifiedSample >> POST_AMP_SHIFT);
         _volume += _volumeDelta;
         *curP++ += amplifiedSample >> POST_AMP_SHIFT;
     }
-    _blendSample = amplifiedSample;
 }
 
 void TuneGenerator::addMainSamplesNoise(Sample* &curP, Sample* endP) {
-    int16_t amplifiedSample = 0;
     int shift = _waveTable->shift;
     const int8_t* samples = _waveTable->samples;
 
@@ -527,11 +591,10 @@ void TuneGenerator::addMainSamplesNoise(Sample* &curP, Sample* endP) {
         }
         _indexDelta += _indexDeltaDelta;
 
-        amplifiedSample = sample * (int8_t)(_volume >> 24);
+        int16_t amplifiedSample = sample * (int8_t)(_volume >> 24);
         _volume += _volumeDelta;
         *curP++ += amplifiedSample >> POST_AMP_SHIFT;
     }
-    _blendSample = amplifiedSample;
 }
 
 void TuneGenerator::addMainSamplesSilence(Sample* &curP, Sample* endP) {
@@ -543,7 +606,6 @@ void TuneGenerator::addMainSamplesSilence(Sample* &curP, Sample* endP) {
 // are Vibrato-specific, and when Vibrato is applied, there are no changes of volume or other
 // frequency shifts.
 void TuneGenerator::addMainSamplesVibrato(Sample* &curP, Sample* endP) {
-    int16_t amplifiedSample = 0;
     int shift = _waveTable->shift;
     const int8_t* samples = _waveTable->samples;
 
@@ -563,71 +625,133 @@ void TuneGenerator::addMainSamplesVibrato(Sample* &curP, Sample* endP) {
             _vibratoDeltaDelta = -_vibratoDeltaDelta;
         }
 
-        amplifiedSample = sample * (int8_t)(_volume >> 24);
+        int16_t amplifiedSample = sample * (int8_t)(_volume >> 24);
         *curP++ += amplifiedSample >> POST_AMP_SHIFT;
     }
-    _blendSample = amplifiedSample;
 }
 
+// Provide a smooth transition between subsequent notes
 void TuneGenerator::addBlendSamples(Sample* &curP, Sample* endP) {
-    if (_sampleIndex == _endMainIndex && _note) {
-        int finalSample = 0;
-        const NoteSpec* nxtNote = peekNextNote();
-        if (
-            nxtNote != nullptr && (
-                nxtNote->wav == WaveForm::SQUARE || nxtNote->wav == WaveForm::PULSE
-            )
-        ) {
-            // Exception. These waves do not start at zero.
-            int16_t nxtVol = nxtNote->vol << VOLUME_SHIFT;
-            finalSample = 127 * (int8_t)(nxtVol >> 24);
-        }
-        _blendDelta = (finalSample - _blendSample) / (_samplesPerNote - _endMainIndex + 1);
-    }
+    int idx = NUM_BLEND_SAMPLES - _numBlendSamples;
 
-    _sampleIndex += endP - curP; // Update beforehand
     while (curP < endP) {
-        _blendSample += _blendDelta;
+        int16_t _blendSample = (
+            _numBlendSamples * _blendBufOut[idx] +
+            (NUM_BLEND_SAMPLES - _numBlendSamples) * _blendBufIn[idx]
+        ) >> BLEND_SHIFT;
 
-        *curP++ += _blendSample >> POST_AMP_SHIFT;
+        *curP++ += _blendSample;
+        ++idx;
+        --_numBlendSamples;
     }
+}
+
+void TuneGenerator::createOutgoingBlendSamplesIfNeeded() {
+    const NoteSpec* nxt;
+    const NoteSpec* cur;
+
+    if (_arpeggioNote != nullptr) {
+        if (_pendingArpeggioSamples) {
+            // No blending required during Arpeggio transitions. All notes are the same volume and
+            // wave, without effects.
+            return;
+        }
+
+        nxt = _arpeggioNote + 1;
+        if (nxt == _tuneSpec->notes + _tuneSpec->numNotes) {
+            nxt = nullptr;
+        }
+        cur = _arpeggioNote;
+    } else {
+        nxt = peekNextNote();
+        cur = _note;
+    }
+
+    if (nxt != nullptr && nxt->wav == cur->wav) {
+        if (
+            nxt->vol == cur->vol &&
+            (nxt->fx == Effect::NONE || nxt->fx == Effect::SLIDE || nxt->fx == Effect::FADE_OUT) &&
+            (cur->fx == Effect::NONE || cur->fx == Effect::SLIDE || cur->fx == Effect::FADE_IN)
+        ) {
+            // No blend required. Transition is smooth by itself
+            return;
+        }
+        if (
+            nxt->fx == Effect::SLIDE &&
+            (cur->fx == Effect::NONE || cur->fx == Effect::SLIDE || cur->fx == Effect::FADE_IN)
+        ) {
+            return;
+        }
+    }
+
+    Sample* buf = _blendBufOut;
+    clearBuffer(buf, NUM_BLEND_SAMPLES);
+    int32_t origWaveIndex = _waveIndex;
+    CALL_MEMBER_FN(*this, _sampleGeneratorFun)(buf, buf + NUM_BLEND_SAMPLES);
+    _numBlendSamples = NUM_BLEND_SAMPLES;
+    _waveIndex = origWaveIndex; // Restore (this avoids artifacts when wave remains unchanged)
+}
+
+void TuneGenerator::createIncomingBlendSamplesIfNeeded() {
+    if (_numBlendSamples == 0) {
+        return;
+    }
+
+    // There are blend samples from the previous note. Fill own buffer so we need to start with
+    // blending.
+
+    Sample* buf = _blendBufIn;
+    clearBuffer(buf, NUM_BLEND_SAMPLES);
+    CALL_MEMBER_FN(*this, _sampleGeneratorFun)(buf, buf + NUM_BLEND_SAMPLES);
+}
+
+// The intensity is double the volume for normal notes (for maximum accuracy)
+int TuneGenerator::intensity() {
+    if (_note == nullptr) {
+        return 0;
+    }
+    if (_note->fx == Effect::SLIDE && _note != _tuneSpec->notes) {
+        // Average over both volumes
+        return (_note - 1)->vol + _note->vol;
+    }
+    if (_note->fx == Effect::FADE_IN || _note->fx == Effect::FADE_OUT) {
+        // Half the volume
+        return _note->vol;
+    }
+    return _note->vol << 1;
 }
 
 int TuneGenerator::addSamples(Sample* buf, int maxSamples) {
+    if (_note == nullptr) {
+        // End of tune
+        return 0;
+    }
+
     Sample* bufP = buf;
     Sample* maxBufP = bufP + maxSamples;
 
     while (bufP < maxBufP) {
-        if (_sampleIndex < _endMainIndex) {
-            // Add main samples until end of main phase or buffer is full
-            int numSamples = min(_endMainIndex - _sampleIndex, (int)(maxBufP - bufP));
-            if (!_waveTable) {
-                addMainSamplesSilence(bufP, bufP + numSamples);
-            } else if (_note->wav == WaveForm::NOISE) {
-                addMainSamplesNoise(bufP, bufP + numSamples);
-            } else if (_note->fx == Effect::VIBRATO) {
-                addMainSamplesVibrato(bufP, bufP + numSamples);
-            } else {
-                addMainSamples(bufP, bufP + numSamples);
-            }
-        } else {
-            // Add ramp-down samples until end of note or buffer is full
-            int numSamples = min(_samplesPerNote - _sampleIndex, (int)(maxBufP - bufP));
+        if (_numBlendSamples > 0) {
+            // Add blend samples until they are exhausted or buffer is full
+            int numSamples = min(_numBlendSamples, (int)(maxBufP - bufP));
             addBlendSamples(bufP, bufP + numSamples);
+        } else if (_sampleIndex < _samplesPerNote) {
+            // Add main samples until end of main phase or buffer is full
+            int numSamples = min(_samplesPerNote - _sampleIndex, (int)(maxBufP - bufP));
+            CALL_MEMBER_FN(*this, _sampleGeneratorFun)(bufP, bufP + numSamples);
         }
 
-        if (_sampleIndex == _samplesPerNote) {
-            if (_note == nullptr) {
-                // End of tune
-                break;
-            }
+        if (_sampleIndex >= _samplesPerNote) {
+            createOutgoingBlendSamplesIfNeeded();
             moveToNextNote();
+
             if (_note == nullptr) {
                 // End of tune
                 break;
             }
 
             startNote();
+            createIncomingBlendSamplesIfNeeded();
         }
     }
 
@@ -637,11 +761,25 @@ int TuneGenerator::addSamples(Sample* buf, int maxSamples) {
 //--------------------------------------------------------------------------------------------------
 // Pattern Generation
 
-void PatternGenerator::setPatternSpec(const PatternSpec* patternSpec) {
+int PatternSpec::lengthInTicks() const {
+    return tunes[0]->lengthInTicks();
+}
+
+void PatternGenerator::setPatternSpec(const PatternSpec* patternSpec, bool isFirst) {
     _patternSpec = patternSpec;
     for (int i = 0; i < _patternSpec->numTunes; i++) {
-        _tuneGens[i].setTuneSpec(_patternSpec->tunes[i]);
+        _tuneGens[i].setTuneSpec(_patternSpec->tunes[i], isFirst);
     }
+}
+
+int PatternGenerator::intensity() {
+    int sum = 0;
+
+    for (int i = _patternSpec->numTunes; --i >= 0; ) {
+        sum += _tuneGens[i].intensity();
+    }
+
+    return sum;
 }
 
 int PatternGenerator::addSamples(Sample* buf, int maxSamples) {
@@ -658,7 +796,21 @@ int PatternGenerator::addSamples(Sample* buf, int maxSamples) {
 //--------------------------------------------------------------------------------------------------
 // Song Generation
 
-void SongGenerator::startPattern() {
+int SongSpec::lengthInTicks() const {
+    int len = 0;
+    for (int i = numPatterns; --i >= 0; ) {
+        len += patterns[i]->lengthInTicks();
+    }
+
+    return len;
+}
+
+int SongSpec::lengthInSeconds() const {
+    // Adding "SAMPLERATE - 1" to round up.
+    return (lengthInTicks() * SAMPLES_PER_TICK + SAMPLERATE - 1) / SAMPLERATE;
+}
+
+void SongGenerator::startPattern(bool isFirst) {
     _patternGenerator.setPatternSpec(*_pattern);
 }
 
@@ -677,25 +829,30 @@ void SongGenerator::setSongSpec(const SongSpec* songSpec, bool loop) {
     _songSpec = songSpec;
     _pattern = _songSpec->patterns;
     _loop = loop;
-    startPattern();
+    startPattern(true);
+}
+
+int SongGenerator::intensity() {
+    return _pattern == nullptr ? 0 : _patternGenerator.intensity();
 }
 
 int SongGenerator::addSamples(Sample* buf, int maxSamples) {
     int totalAdded = 0;
 
+    if (_pattern == nullptr) {
+        // We're done
+        return totalAdded;
+    }
+
     do {
         totalAdded += _patternGenerator.addSamples(buf + totalAdded, maxSamples - totalAdded);
         if (totalAdded < maxSamples) {
-            if (_pattern == nullptr) {
-                // We're done
-                return totalAdded;
-            }
             moveToNextPattern();
             if (_pattern == nullptr) {
                 // We're done
                 return totalAdded;
             }
-            startPattern();
+            startPattern(false);
         }
     } while (totalAdded < maxSamples);
 
@@ -704,14 +861,6 @@ int SongGenerator::addSamples(Sample* buf, int maxSamples) {
 
 //--------------------------------------------------------------------------------------------------
 // Music Handler
-
-inline void addZeros(int16_t* buf, int num) {
-    // Note: implementation assumes that num > 0
-    int16_t* endP = buf + num;
-    do {
-        *buf = 0;
-    } while (++buf != endP);
-}
 
 MusicHandler::MusicHandler() {
     _readP = _buffer;
@@ -730,6 +879,10 @@ void MusicHandler::play(const SongSpec* songSpec, bool loop) {
     _zeroP = nullptr;
 }
 
+int MusicHandler::intensity() {
+    return _tuneGenerator.intensity() + _songGenerator.intensity();
+}
+
 void MusicHandler::update() {
     int16_t* targetHeadP = _readP; // Copy as its continuously changing
 
@@ -739,13 +892,13 @@ void MusicHandler::update() {
         bool addedZeros = false;
 
         if (!_tuneGenerator.isDone()) {
-            addZeros(_headP, maxSamples);
+            clearBuffer(_headP, maxSamples);
             addedZeros = true;
             _tuneGenerator.addSamples(_headP, maxSamples);
         }
         if (!_songGenerator.isDone()) {
             if (!addedZeros) {
-                addZeros(_headP, maxSamples);
+                clearBuffer(_headP, maxSamples);
                 addedZeros = true;
             }
             _songGenerator.addSamples(_headP, maxSamples);
@@ -762,7 +915,7 @@ void MusicHandler::update() {
                 maxSamples = min(maxSamples, (int)(_zeroP - _headP));
             }
             if (!addedZeros) {
-                addZeros(_headP, maxSamples);
+                clearBuffer(_headP, maxSamples);
             }
         }
         _headP += maxSamples;
