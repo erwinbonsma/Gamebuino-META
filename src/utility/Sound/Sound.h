@@ -119,7 +119,9 @@ public:
 	
 	void setVolume(uint8_t volume);
 	uint8_t getVolume();
-	
+
+	int getLevel();
+
 	uint32_t getPos(int8_t i);
 };
 

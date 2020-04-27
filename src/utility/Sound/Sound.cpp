@@ -402,6 +402,14 @@ uint8_t Sound::getVolume() {
 	return globalVolume;
 }
 
+int Sound::getLevel() {
+#if SOUND_ENABLE_MUSIC
+	return musicHandler.intensity();
+#else // SOUND_ENABLE_MUSIC
+	return false;
+#endif // SOUND_ENABLE_MUSIC
+}
+
 uint32_t Sound::getPos(int8_t i) {
 #if SOUND_CHANNELS > 0
 	if (!isPlaying(i) || !(handlers[i])) {
