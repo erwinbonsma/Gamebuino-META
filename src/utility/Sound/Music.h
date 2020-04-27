@@ -17,6 +17,13 @@
 #else
   #include "../../config/config.h"
   #define OPTIMIZE_ATTRIBUTE __attribute__((optimize("-O3")))
+  // Undefine (silly) defines from binary.h which interfere with Note enumeration type
+  #ifdef B0
+    #undef B0
+  #endif
+  #ifdef B1
+    #undef B1
+  #endif
   namespace Gamebuino_Meta {
 #endif
 
