@@ -233,6 +233,19 @@ void Sound::playSong(const SongSpec* song, bool loop) {
 #endif
 }
 
+bool Sound::loopSong(bool flag) {
+#if SOUND_ENABLE_MUSIC
+	musicHandler.loopSong(flag);
+#endif
+}
+
+bool Sound::pauseSong(bool flag) {
+#if SOUND_ENABLE_MUSIC
+	musicHandler.pauseSong(flag);
+#endif
+}
+
+
 // Get optimized away if fx is not used
 uint32_t fx_sound_buffer[SOUND_FX_BUFFERSIZE/4];
 
@@ -394,6 +407,22 @@ bool Sound::isSongPlaying() {
 #endif // SOUND_ENABLE_MUSIC
 }
 
+bool Sound::isSongPaused() {
+#if SOUND_ENABLE_MUSIC
+	return musicHandler.isSongPaused();
+#else // SOUND_ENABLE_MUSIC
+	return false;
+#endif // SOUND_ENABLE_MUSIC
+}
+
+bool Sound::isSongLooping() {
+#if SOUND_ENABLE_MUSIC
+	return musicHandler.isSongLooping();
+#else // SOUND_ENABLE_MUSIC
+	return false;
+#endif // SOUND_ENABLE_MUSIC
+}
+
 void Sound::setVolume(uint8_t volume) {
 	globalVolume = constrain(volume, 0, 8);
 }
@@ -404,9 +433,17 @@ uint8_t Sound::getVolume() {
 
 int Sound::getLevel() {
 #if SOUND_ENABLE_MUSIC
-	return musicHandler.intensity();
+	return musicHandler.outputLevel();
 #else // SOUND_ENABLE_MUSIC
-	return false;
+	return 0;
+#endif // SOUND_ENABLE_MUSIC
+}
+
+int Sound::songProgressInSeconds() {
+#if SOUND_ENABLE_MUSIC
+	return musicHandler.songProgressInSeconds();
+#else // SOUND_ENABLE_MUSIC
+	return 0;
 #endif // SOUND_ENABLE_MUSIC
 }
 

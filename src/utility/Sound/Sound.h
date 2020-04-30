@@ -92,6 +92,8 @@ public:
 	int8_t play(Sound_Handler* handler, bool loop = false);
 
 	void playSong(const SongSpec* song, bool loop = false);
+	bool loopSong(bool flag);
+	bool pauseSong(bool flag);
 
 	void fx(const Sound_FX & fx);
 	void fx(const Sound_FX * const fx);
@@ -105,6 +107,8 @@ public:
 	
 	bool isPlaying(int8_t i);
 	bool isSongPlaying();
+	bool isSongPaused();
+	bool isSongLooping();
 	
 	void update();
 	void mute();
@@ -121,6 +125,7 @@ public:
 	uint8_t getVolume();
 
 	int getLevel();
+	int songProgressInSeconds();
 
 	uint32_t getPos(int8_t i);
 };
