@@ -193,7 +193,8 @@ public:
     void stop() { _note = nullptr; }
     bool isDone() { return _note == nullptr; }
 
-    int intensity();
+    int ticksPlayed();
+    int outputLevel();
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -225,7 +226,8 @@ class PatternGenerator {
 public:
     void setPatternSpec(const PatternSpec* patternSpec, bool isFirst = true);
 
-    int intensity();
+    int ticksPlayed();
+    int outputLevel();
 
     // Adds samples for the pattern to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -251,7 +253,9 @@ class SongGenerator {
     const SongSpec* _songSpec;
     PatternGenerator _patternGenerator;
     const PatternSpec *const * _pattern;
+    int _ticksPlayedInEarlierPatterns;
     bool _loop;
+    bool _paused;
 
     void startPattern(bool isFirst);
     void moveToNextPattern();
@@ -259,9 +263,16 @@ class SongGenerator {
 public:
     void setSongSpec(const SongSpec* songSpec, bool loop);
     void stop() { _pattern = nullptr; };
+
+    void setLoop(bool flag) { _loop = flag; }
+    void setPause(bool flag) { _paused = flag; }
+
+    bool isLooping() { return _loop; }
+    bool isPaused() { return _paused; }
+    int progressInSeconds();
     bool isDone() { return _pattern == nullptr; }
 
-    int intensity();
+    int outputLevel();
 
     // Adds samples for the tune to the given buffer. Note, it does not overwrite existing values
     // in the buffer, but adds to the existing value so that multiple generators can contribute to
@@ -294,13 +305,21 @@ public:
     void play(const SongSpec* songSpec, bool loop);
 
     bool isTunePlaying() { return !_tuneGenerator.isDone(); }
-    bool isSongPlaying() { return !_songGenerator.isDone(); }
-    bool isPlaying() { return !(_tuneGenerator.isDone() && _songGenerator.isDone()); }
+
+    bool isSongPlaying() { return !(_songGenerator.isDone() || _songGenerator.isPaused()); }
+    bool isSongPaused() { return _songGenerator.isPaused(); }
+    bool isSongLooping() { return _songGenerator.isLooping(); }
+
+    bool isPlaying() { return isTunePlaying() || isSongPlaying(); }
 
     void stopTune() { _tuneGenerator.stop(); }
     void stopSong() { _songGenerator.stop(); }
 
-    int intensity();
+    void loopSong(bool flag) { _songGenerator.setLoop(flag); }
+    void pauseSong(bool flag) { _songGenerator.setPause(flag); }
+    int songProgressInSeconds() { return _songGenerator.progressInSeconds(); }
+
+    int outputLevel();
 
     void update();
 
