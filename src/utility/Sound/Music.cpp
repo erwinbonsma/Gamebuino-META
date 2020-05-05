@@ -95,6 +95,7 @@ const int8_t triangleWaveSamples[510] = {
 };
 const WaveTable triangleWave = WaveTable {
     .numSamples = 510,
+    .initialWaveIndex = 0,
     .shift = 6 + 15,
     .samples = triangleWaveSamples
 };
@@ -124,6 +125,7 @@ const int8_t tiltedSawWaveSamples[298] = {
 };
 const WaveTable tiltedSawWave = WaveTable {
     .numSamples = 298,
+    .initialWaveIndex = 0,
     .shift = 6 + 15,
     .samples = tiltedSawWaveSamples
 };
@@ -149,6 +151,7 @@ const int8_t sawWaveSamples[256] = {
 };
 const WaveTable sawWave = WaveTable {
     .numSamples = 256,
+    .initialWaveIndex = 0,
     .shift = 6 + 15,
     .samples = sawWaveSamples
 };
@@ -156,6 +159,7 @@ const WaveTable sawWave = WaveTable {
 const int8_t squareWaveSamples[2] = { 127, -128 };
 const WaveTable squareWave = WaveTable {
     .numSamples = 2,
+    .initialWaveIndex = 0,
     .shift = 13 + 15,
     .samples = squareWaveSamples
 };
@@ -163,6 +167,7 @@ const WaveTable squareWave = WaveTable {
 const int8_t pulseWaveSamples[3] = { 127, -128, -128 };
 const WaveTable pulseWave = WaveTable {
     .numSamples = 3,
+    .initialWaveIndex = 0,
     .shift = 13 + 15,
     .samples = pulseWaveSamples
 };
@@ -239,6 +244,7 @@ const int8_t organWaveSamples[1020] = {
 };
 const WaveTable organWave = WaveTable {
     .numSamples = 1020,
+    .initialWaveIndex = 0,
     .shift = 5 + 15,
     .samples = organWaveSamples
 };
@@ -278,10 +284,22 @@ const int8_t noiseWaveSamples[510] = {
      -22,  -21,  -20,  -19,  -17,  -14,  -13,  -10,   -7,   -5,   -2,   -1,    0,    3,    6,    9,
       12,   11,   11,   11,   11,   11,   12,   12,   13,   11,   10,    8,    7,    7,    6,    6
 };
+constexpr int numNoiseSamples = 510;
+constexpr int noiseShift = 6 + 15;
 const WaveTable noiseWave = WaveTable {
-    .numSamples = 510,
-    .shift = 6 + 15,
+    .numSamples = numNoiseSamples,
+    // Start at second-zerro crossing so that end of (first) wave is reached earlier, as only then
+    // is frequency adapted every quarter-period.
+    .initialWaveIndex = 255,
+    .shift = noiseShift,
     .samples = noiseWaveSamples
+};
+constexpr int phaserShift = 21;
+const WaveTable phaserWave = WaveTable {
+    .numSamples = 512,
+    .initialWaveIndex = 128,
+    .shift = phaserShift,
+    .samples = nullptr // Not used. Samples are calculated for this instrument
 };
 
 const WaveTable* waveTableLookup[9] = {
@@ -292,7 +310,7 @@ const WaveTable* waveTableLookup[9] = {
     &pulseWave,
     &organWave,
     &noiseWave,
-    &organWave, // Also use organ for unsupported PHASER
+    &phaserWave,
     nullptr
 };
 
@@ -396,6 +414,47 @@ void TuneGenerator::moveToNextNote() {
     }
 }
 
+bool TuneGenerator::setWaveTable(WaveForm waveForm) {
+    const WaveTable* prevWaveTable = _waveTable;
+    _waveTable = waveTableLookup[(int)waveForm];
+
+    if (_waveTable == nullptr) {
+        _sampleGeneratorFun = &TuneGenerator::addMainSamplesSilence;
+        return false; // Can (and should) skip remainder.
+    }
+
+    if (
+        _waveTable != prevWaveTable ||
+        _sampleGeneratorFun == &TuneGenerator::addMainSamplesVibrato
+    ) {
+        switch (waveForm) {
+            case WaveForm::NOISE:
+                _sampleGeneratorFun = &TuneGenerator::addMainSamplesNoise;
+                break;
+            case WaveForm::PHASER:
+                _sampleGeneratorFun = &TuneGenerator::addMainSamplesPhaser;
+                break;
+            default:
+                _sampleGeneratorFun = &TuneGenerator::addMainSamples;
+                break;
+        }
+
+        if (_waveTable != prevWaveTable) {
+            // Update the maximum for the new table
+            _maxWaveIndex = _waveTable->numSamples << _waveTable->shift;
+
+            // Change of instrument. Let it start at zero point
+            _waveIndex = _waveTable->initialWaveIndex << _waveTable->shift;
+
+            // Also reset instrument specific fields
+            _indexNoiseDelta = 0;
+            _phaserCount = 0;
+        }
+    }
+
+    return true;
+}
+
 void TuneGenerator::startArpeggio() {
     // Enter Arpeggio mode
     _arpeggioNote = _note;
@@ -409,14 +468,7 @@ void TuneGenerator::startArpeggio() {
     }
     _samplesPerNote = (noteDuration * SAMPLES_PER_TICK) << SAMPLERATE_SHIFT;
 
-    _waveTable = waveTableLookup[(int)_arpeggioNote->wav];
-    _maxWaveIndex = _waveTable->numSamples << _waveTable->shift;
-
-    if (_arpeggioNote->wav == WaveForm::NOISE) {
-        _sampleGeneratorFun = &TuneGenerator::addMainSamplesNoise;
-    } else {
-        _sampleGeneratorFun = &TuneGenerator::addMainSamples;
-    }
+    setWaveTable(_arpeggioNote->wav);
 
     _volume = _arpeggioNote->vol << VOLUME_SHIFT;
     _volumeDelta = 0;
@@ -460,22 +512,8 @@ void TuneGenerator::startNote() {
             startArpeggio();
         } else {
             // Set wave
-            const WaveTable* prevWaveTable = _waveTable;
-            _waveTable = waveTableLookup[(int)_note->wav];
-            if (_waveTable == nullptr) {
-                _sampleGeneratorFun = &TuneGenerator::addMainSamplesSilence;
+            if (!setWaveTable(_note->wav)) {
                 return;
-            }
-
-            if (_waveTable != prevWaveTable) {
-                _waveIndex = 0;
-            }
-            _maxWaveIndex = _waveTable->numSamples << _waveTable->shift;
-
-            _indexNoiseDelta = 0;
-            if (_note->wav == WaveForm::NOISE) {
-                _maxWaveIndexOrig = _maxWaveIndex;
-                _maxWaveIndex >>= 2;
             }
 
             // Set volume
@@ -536,32 +574,23 @@ void TuneGenerator::startNote() {
 
             break;
         }
-        case Effect::VIBRATO: {
-            const NoteSpec* prevNote = peekPrevNote();
-            if (
-                (prevNote == nullptr || prevNote->fx != Effect::VIBRATO) &&
-                // Vibrato is not applied on NOISE and should not overwrite shared Noise values
-                _note->wav != WaveForm::NOISE
-            ) {
-                _vibratoDelta = 0;
-                // Note: The order of operations matters to avoid overflows during calculation
-                _vibratoDeltaDelta = _indexDelta / (
-                    VIBRATO_META_PERIOD * (_maxWaveIndex / _indexDelta)
-                );
-            }
+        case Effect::VIBRATO:
+            if (_sampleGeneratorFun == &TuneGenerator::addMainSamples) {
+                // Currently only support Vibrato for simple instruments (not NOISE and PHASER)
+                _sampleGeneratorFun = &TuneGenerator::addMainSamplesVibrato;
 
+                const NoteSpec* prevNote = peekPrevNote();
+                if (prevNote == nullptr || prevNote->fx != Effect::VIBRATO) {
+                    _vibratoDelta = 0;
+                    // Note: The order of operations matters to avoid overflows during calculation
+                    _vibratoDeltaDelta = _indexDelta / (
+                        VIBRATO_META_PERIOD * (_maxWaveIndex / _indexDelta)
+                    );
+                }
+            }
             break;
-        }
         case Effect::NONE:
             break;
-    }
-
-    if (_note->wav == WaveForm::NOISE) {
-        _sampleGeneratorFun = &TuneGenerator::addMainSamplesNoise;
-    } else if (_note->fx == Effect::VIBRATO) {
-        _sampleGeneratorFun = &TuneGenerator::addMainSamplesVibrato;
-    } else {
-        _sampleGeneratorFun = &TuneGenerator::addMainSamples;
     }
 }
 
@@ -579,19 +608,49 @@ void TuneGenerator::addMainSamples(Sample* &curP, Sample* endP) {
         _indexDelta += _indexDeltaDelta;
 
         int16_t amplifiedSample = sample * (int8_t)(_volume >> 24);
-        //printf("idx=%d %d\n", _waveIndex >> shift, amplifiedSample >> POST_AMP_SHIFT);
+        _volume += _volumeDelta;
+        *curP++ += amplifiedSample >> POST_AMP_SHIFT;
+    }
+}
+
+void TuneGenerator::addMainSamplesPhaser(Sample* &curP, Sample* endP) {
+    int p = ((_phaserCount < 128) ? _phaserCount : 255 - _phaserCount) << 9;
+    int m = p + (((0x1 << 16) - p) >> 1);
+    int hm = (m + 1) >> 1;
+
+    _sampleIndex += endP - curP; // Update beforehand
+    while (curP < endP) {
+        int t = (_waveIndex >> (phaserShift - 8)) & 0xffff; // Throw away most significant bit
+        int s = (t < p) ? t : p + ((t - p) >> 1);
+        if (_waveIndex & (0x1 << (phaserShift + 8))) { // Check most significant bit
+            s = (hm - s) >> 8;
+        } else {
+            s = (s - hm) >> 8;
+        }
+
+        _waveIndex += _indexDelta;
+        if (_waveIndex >= _maxWaveIndex) {
+            _waveIndex -= _maxWaveIndex;
+            _phaserCount += 2;
+            p = ((_phaserCount < 128) ? _phaserCount : 255 - _phaserCount) << 9;
+            m =  p + (((0x1 << 16) - p) >> 1);
+            hm = (m + 1) >> 1;
+        }
+        _indexDelta += _indexDeltaDelta;
+
+        int16_t amplifiedSample = s * (int8_t)(_volume >> 24);
         _volume += _volumeDelta;
         *curP++ += amplifiedSample >> POST_AMP_SHIFT;
     }
 }
 
 void TuneGenerator::addMainSamplesNoise(Sample* &curP, Sample* endP) {
-    int shift = _waveTable->shift;
+    constexpr int maxWaveIndexFullRange = numNoiseSamples << noiseShift;
     const int8_t* samples = _waveTable->samples;
 
     _sampleIndex += endP - curP; // Update beforehand
     while (curP < endP) {
-        int8_t sample = samples[_waveIndex >> shift];
+        int8_t sample = samples[_waveIndex >> noiseShift];
         _waveIndex += _indexDelta;
         _waveIndex += _indexNoiseDelta;
         if (_waveIndex >= _maxWaveIndex) {
@@ -606,11 +665,11 @@ void TuneGenerator::addMainSamplesNoise(Sample* &curP, Sample* endP) {
                 _indexNoiseDelta += _indexDelta;
             };
             // Update max wave index to end of the waveform quadrant we just entered
-            if (_maxWaveIndex == _maxWaveIndexOrig) {
-                _waveIndex -= _maxWaveIndex;
+            if (_maxWaveIndex == maxWaveIndexFullRange) {
+                _waveIndex -= maxWaveIndexFullRange;
                 _maxWaveIndex = 0;
             } else {
-                _maxWaveIndex += (_maxWaveIndexOrig >> 2);
+                _maxWaveIndex += (maxWaveIndexFullRange >> 2);
             }
         }
         _indexDelta += _indexDeltaDelta;
@@ -839,7 +898,7 @@ int SongSpec::lengthInSeconds() const {
 }
 
 void SongGenerator::startPattern(bool isFirst) {
-    _patternGenerator.setPatternSpec(*_pattern);
+    _patternGenerator.setPatternSpec(*_pattern, isFirst);
 }
 
 void SongGenerator::moveToNextPattern() {
