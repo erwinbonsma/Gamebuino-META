@@ -433,7 +433,11 @@ uint8_t Sound::getVolume() {
 
 int Sound::getLevel() {
 #if SOUND_ENABLE_MUSIC
-	return musicHandler.outputLevel();
+	// The output level as generated
+	int level = musicHandler.outputLevel();
+
+	// Adjust to reflect the global volume
+	return (level << 2) >> (8 - globalVolume);
 #else // SOUND_ENABLE_MUSIC
 	return 0;
 #endif // SOUND_ENABLE_MUSIC
