@@ -32,7 +32,7 @@ constexpr uint8_t MAX_OCTAVE = 7;
 constexpr uint8_t PERIOD_SHIFT = MAX_OCTAVE + SPEC_PERIOD_SHIFT;
 
 // Controls the amount of frequency change.
-constexpr uint8_t VIBRATO_MAGNITUDE_SHIFT = 7;
+constexpr uint8_t VIBRATO_MAGNITUDE_SHIFT = 6;
 
 // The amount of wave periods spanned by a single period of the Vibrato effect.
 constexpr uint8_t VIBRATO_META_PERIOD = 24;
@@ -47,9 +47,12 @@ constexpr uint8_t VOLUME_BITS = 4;
 // most-significant byte can be safely cast to (signed) int8_t value.
 constexpr uint8_t VOLUME_SHIFT = 32 - VOLUME_BITS - 1;
 
+// Shift such that volume is in range [0..64]
+constexpr uint8_t POST_VOLUME_SHIFT = 24;
+
 // Number of bits to shift amplified sample so that it is in range [-128..127] again.
-///  Inputs: - sample with range [-128..127]
-//           - volume with range [   0.. 64] (the range of the most-significant byte)
+//   Inputs: - sample with range [-128..127]
+//           - volume with range [   0.. 64] (64 is highest power of two that fits in int8_t)
 constexpr uint8_t POST_AMP_SHIFT = 6;
 
 // Notes:
@@ -425,7 +428,8 @@ bool TuneGenerator::setWaveTable(WaveForm waveForm) {
 
     if (
         _waveTable != prevWaveTable ||
-        _sampleGeneratorFun == &TuneGenerator::addMainSamplesVibrato
+        _sampleGeneratorFun == &TuneGenerator::addMainSamplesVibrato ||
+        _sampleGeneratorFun == &TuneGenerator::addMainSamplesPhaserVibrato
     ) {
         switch (waveForm) {
             case WaveForm::NOISE:
@@ -574,13 +578,23 @@ void TuneGenerator::startNote() {
 
             break;
         }
-        case Effect::VIBRATO:
+        case Effect::VIBRATO: {
+            bool init = false;
             if (_sampleGeneratorFun == &TuneGenerator::addMainSamples) {
-                // Currently only support Vibrato for simple instruments (not NOISE and PHASER)
                 _sampleGeneratorFun = &TuneGenerator::addMainSamplesVibrato;
+                init = true;
+            } else if (_sampleGeneratorFun == &TuneGenerator::addMainSamplesPhaser) {
+                _sampleGeneratorFun = &TuneGenerator::addMainSamplesPhaserVibrato;
+                init = true;
+            }
 
+            if (init) {
                 const NoteSpec* prevNote = peekPrevNote();
-                if (prevNote == nullptr || prevNote->fx != Effect::VIBRATO) {
+                if (
+                    prevNote == nullptr ||
+                    prevNote->fx != Effect::VIBRATO ||
+                    prevNote->note != _note->note
+                ) {
                     _vibratoDelta = 0;
                     // Note: The order of operations matters to avoid overflows during calculation
                     _vibratoDeltaDelta = _indexDelta / (
@@ -589,31 +603,34 @@ void TuneGenerator::startNote() {
                 }
             }
             break;
+        }
         case Effect::NONE:
             break;
     }
 }
 
 void TuneGenerator::addMainSamples(Sample* &curP, Sample* endP) {
-    int shift = _waveTable->shift;
-    const int8_t* samples = _waveTable->samples;
+    const int8_t waveIndexshift = _waveTable->shift;
+    const int8_t *const samples = _waveTable->samples;
+    const int8_t postAmpShift = (POST_AMP_SHIFT - _tuneSpec->boostVolume);
 
     _sampleIndex += endP - curP; // Update beforehand
     while (curP < endP) {
-        int8_t sample = samples[_waveIndex >> shift];
+        int8_t sample = samples[_waveIndex >> waveIndexshift];
         _waveIndex += _indexDelta;
         if (_waveIndex >= _maxWaveIndex) {
             _waveIndex -= _maxWaveIndex;
         }
         _indexDelta += _indexDeltaDelta;
 
-        int16_t amplifiedSample = sample * (int8_t)(_volume >> 24);
+        int16_t amplifiedSample = sample * (int8_t)(_volume >> POST_VOLUME_SHIFT);
         _volume += _volumeDelta;
-        *curP++ += amplifiedSample >> POST_AMP_SHIFT;
+        *curP++ += amplifiedSample >> postAmpShift;
     }
 }
 
 void TuneGenerator::addMainSamplesPhaser(Sample* &curP, Sample* endP) {
+    const int8_t postAmpShift = (POST_AMP_SHIFT - _tuneSpec->boostVolume);
     int p = ((_phaserCount < 128) ? _phaserCount : 255 - _phaserCount) << 9;
     int m = p + (((0x1 << 16) - p) >> 1);
     int hm = (m + 1) >> 1;
@@ -638,15 +655,53 @@ void TuneGenerator::addMainSamplesPhaser(Sample* &curP, Sample* endP) {
         }
         _indexDelta += _indexDeltaDelta;
 
-        int16_t amplifiedSample = s * (int8_t)(_volume >> 24);
+        int16_t amplifiedSample = s * (int8_t)(_volume >> POST_VOLUME_SHIFT);
         _volume += _volumeDelta;
-        *curP++ += amplifiedSample >> POST_AMP_SHIFT;
+        *curP++ += amplifiedSample >> postAmpShift;
+    }
+}
+
+void TuneGenerator::addMainSamplesPhaserVibrato(Sample* &curP, Sample* endP) {
+    const int8_t postAmpShift = (POST_AMP_SHIFT - _tuneSpec->boostVolume);
+    int p = ((_phaserCount < 128) ? _phaserCount : 255 - _phaserCount) << 9;
+    int m = p + (((0x1 << 16) - p) >> 1);
+    int hm = (m + 1) >> 1;
+
+    _sampleIndex += endP - curP; // Update beforehand
+    while (curP < endP) {
+        int t = (_waveIndex >> (phaserShift - 8)) & 0xffff; // Throw away most significant bit
+        int s = (t < p) ? t : p + ((t - p) >> 1);
+        if (_waveIndex & (0x1 << (phaserShift + 8))) { // Check most significant bit
+            s = (hm - s) >> 8;
+        } else {
+            s = (s - hm) >> 8;
+        }
+
+        _waveIndex += _indexDelta;
+        _waveIndex += _vibratoDelta >> VIBRATO_MAGNITUDE_SHIFT;
+        if (_waveIndex >= _maxWaveIndex) {
+            _waveIndex -= _maxWaveIndex;
+            _phaserCount += 2;
+            p = ((_phaserCount < 128) ? _phaserCount : 255 - _phaserCount) << 9;
+            m =  p + (((0x1 << 16) - p) >> 1);
+            hm = (m + 1) >> 1;
+        }
+        _indexDelta += _indexDeltaDelta;
+        _vibratoDelta += _vibratoDeltaDelta;
+        if (abs(_vibratoDelta) > _indexDelta) {
+            _vibratoDeltaDelta = -_vibratoDeltaDelta;
+        }
+
+        int16_t amplifiedSample = s * (int8_t)(_volume >> POST_VOLUME_SHIFT);
+        _volume += _volumeDelta;
+        *curP++ += amplifiedSample >> postAmpShift;
     }
 }
 
 void TuneGenerator::addMainSamplesNoise(Sample* &curP, Sample* endP) {
     constexpr int maxWaveIndexFullRange = numNoiseSamples << noiseShift;
-    const int8_t* samples = _waveTable->samples;
+    const int8_t *const samples = _waveTable->samples;
+    const int8_t postAmpShift = (POST_AMP_SHIFT - _tuneSpec->boostVolume);
 
     _sampleIndex += endP - curP; // Update beforehand
     while (curP < endP) {
@@ -674,9 +729,9 @@ void TuneGenerator::addMainSamplesNoise(Sample* &curP, Sample* endP) {
         }
         _indexDelta += _indexDeltaDelta;
 
-        int16_t amplifiedSample = sample * (int8_t)(_volume >> 24);
+        int16_t amplifiedSample = sample * (int8_t)(_volume >> POST_VOLUME_SHIFT);
         _volume += _volumeDelta;
-        *curP++ += amplifiedSample >> POST_AMP_SHIFT;
+        *curP++ += amplifiedSample >> postAmpShift;
     }
 }
 
@@ -689,27 +744,27 @@ void TuneGenerator::addMainSamplesSilence(Sample* &curP, Sample* endP) {
 // are Vibrato-specific, and when Vibrato is applied, there are no changes of volume or other
 // frequency shifts.
 void TuneGenerator::addMainSamplesVibrato(Sample* &curP, Sample* endP) {
-    int shift = _waveTable->shift;
-    const int8_t* samples = _waveTable->samples;
+    const int8_t waveIndexshift = _waveTable->shift;
+    const int8_t *const samples = _waveTable->samples;
+    const int8_t postAmpShift = (POST_AMP_SHIFT - _tuneSpec->boostVolume);
 
     _sampleIndex += endP - curP; // Update beforehand
     while (curP < endP) {
-        int8_t sample = samples[_waveIndex >> shift];
+        int8_t sample = samples[_waveIndex >> waveIndexshift];
         _waveIndex += _indexDelta;
         _waveIndex += _vibratoDelta >> VIBRATO_MAGNITUDE_SHIFT;
         if (_waveIndex >= _maxWaveIndex) {
             _waveIndex -= _maxWaveIndex;
-        } else if (_waveIndex < 0) {
-            _waveIndex += _maxWaveIndex;
         }
+        assert(_waveIndex >= 0);
 
         _vibratoDelta += _vibratoDeltaDelta;
         if (abs(_vibratoDelta) > _indexDelta) {
             _vibratoDeltaDelta = -_vibratoDeltaDelta;
         }
 
-        int16_t amplifiedSample = sample * (int8_t)(_volume >> 24);
-        *curP++ += amplifiedSample >> POST_AMP_SHIFT;
+        int16_t amplifiedSample = sample * (int8_t)(_volume >> POST_VOLUME_SHIFT);
+        *curP++ += amplifiedSample >> postAmpShift;
     }
 }
 
@@ -753,8 +808,10 @@ void TuneGenerator::createOutgoingBlendSamplesIfNeeded() {
     if (nxt != nullptr && nxt->wav == cur->wav) {
         if (
             nxt->vol == cur->vol &&
-            (nxt->fx == Effect::NONE || nxt->fx == Effect::SLIDE || nxt->fx == Effect::FADE_OUT) &&
-            (cur->fx == Effect::NONE || cur->fx == Effect::SLIDE || cur->fx == Effect::FADE_IN)
+            (nxt->fx == Effect::NONE || nxt->fx == Effect::SLIDE || nxt->fx == Effect::FADE_OUT
+             || nxt->fx == Effect::VIBRATO) &&
+            (cur->fx == Effect::NONE || cur->fx == Effect::SLIDE || cur->fx == Effect::FADE_IN
+             || cur->fx == Effect::VIBRATO)
         ) {
             // No blend required. Transition is smooth by itself
             return;
@@ -763,6 +820,11 @@ void TuneGenerator::createOutgoingBlendSamplesIfNeeded() {
             nxt->fx == Effect::SLIDE &&
             (cur->fx == Effect::NONE || cur->fx == Effect::SLIDE || cur->fx == Effect::FADE_IN)
         ) {
+            return;
+        }
+        if (nxt->wav == WaveForm::SQUARE || cur->wav == WaveForm::SQUARE) {
+            // No blend required. These transitions are abrupt anyway and blending these waves
+            // during transitions may actually introduce high frequency noise due to toggling.
             return;
         }
     }
@@ -795,13 +857,13 @@ int TuneGenerator::outputLevel() {
     }
     if (_note->fx == Effect::SLIDE && _note != _tuneSpec->notes) {
         // Average over both volumes
-        return (_note - 1)->vol + _note->vol;
+        return ((_note - 1)->vol + _note->vol) << _tuneSpec->boostVolume;
     }
     if (_note->fx == Effect::FADE_IN || _note->fx == Effect::FADE_OUT) {
         // Half the volume
-        return _note->vol;
+        return _note->vol << _tuneSpec->boostVolume;
     }
-    return _note->vol << 1;
+    return _note->vol << (1 + _tuneSpec->boostVolume);
 }
 
 int TuneGenerator::addSamples(Sample* buf, int maxSamples) {

@@ -56,7 +56,7 @@ constexpr uint8_t NUM_BLEND_SAMPLES = 1 << BLEND_SHIFT;
 typedef int16_t Sample;
 
 constexpr int numNotes = 12;
-enum class Note : int8_t {
+enum class Note : uint8_t {
     C0  = 0x00, Cs0 = 0x01, D0  = 0x02, Ds0 = 0x03, E0  = 0x04, F0  = 0x05,
     Fs0 = 0x06, G0  = 0x07, Gs0 = 0x08, A0  = 0x09, As0 = 0x0a, B0  = 0x0b,
     C1  = 0x10, Cs1 = 0x11, D1  = 0x12, Ds1 = 0x13, E1  = 0x14, F1  = 0x15,
@@ -72,7 +72,9 @@ enum class Note : int8_t {
     C6  = 0x60, Cs6 = 0x61, D6  = 0x62, Ds6 = 0x63, E6  = 0x64, F6  = 0x65,
     Fs6 = 0x66, G6  = 0x67, Gs6 = 0x68, A6  = 0x69, As6 = 0x6a, B6  = 0x6b,
     C7  = 0x70, Cs7 = 0x71, D7  = 0x72, Ds7 = 0x73, E7  = 0x74, F7  = 0x75,
-    Fs7 = 0x76, G7  = 0x77, Gs7 = 0x78, A7  = 0x79, As7 = 0x7a, B7  = 0x7b
+    Fs7 = 0x76, G7  = 0x77, Gs7 = 0x78, A7  = 0x79, As7 = 0x7a, B7  = 0x7b,
+    C8  = 0x80, Cs8 = 0x81, D8  = 0x82, Ds8 = 0x83, E8  = 0x84, F8  = 0x85,
+    Fs8 = 0x86, G8  = 0x87, Gs8 = 0x88, A8  = 0x89, As8 = 0x8a, B8  = 0x8b
 };
 
 enum class WaveForm : int8_t {
@@ -111,6 +113,15 @@ struct TuneSpec {
     uint8_t noteDuration;        // in "ticks". [1..64]
     uint16_t loopStart, numNotes;
     const NoteSpec *const notes;
+
+    // Optionally double the volume of a tune (from eight bits to nine bits). It effectively plays
+    // the same tune twice but is better for two reasons. One, it does not double the CPU load. Two,
+    // it ensures that both tunes are fully in phase and really amplify each other. This is not the
+    // case otherwise. At worst, two equal tunes (or notes) cancel each other out fully. This
+    // happens when they are exactly out of phase.
+    //
+    // Note: Care should be taken to avoid overflowing the ten-bit audio range for Gamebuino.
+    bool boostVolume;
 
     int lengthInTicks() const;
 };
@@ -181,6 +192,7 @@ class TuneGenerator {
 
     void addMainSamples(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
     void addMainSamplesPhaser(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
+    void addMainSamplesPhaserVibrato(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
     void addMainSamplesNoise(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
     void addMainSamplesSilence(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
     void addMainSamplesVibrato(Sample* &curP, Sample* endP) OPTIMIZE_ATTRIBUTE;
