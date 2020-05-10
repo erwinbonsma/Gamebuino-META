@@ -272,7 +272,7 @@ class SongGenerator {
 
 public:
     void setSongSpec(const SongSpec* songSpec, bool loop);
-    void stop() { _pattern = nullptr; };
+    void stop() { _pattern = nullptr; _paused = false; };
 
     void setLoop(bool flag) { _loop = flag; }
     void setPause(bool flag) { _paused = flag; }
