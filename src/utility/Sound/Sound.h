@@ -88,7 +88,7 @@ public:
 	int8_t play(uint8_t (&buf)[N], bool loop = false) {
 		return play((const uint8_t*)buf, N, loop);
 	};
-	
+
 	int8_t play(Sound_Handler* handler, bool loop = false);
 
 	void playSong(const SongSpec* song, bool loop = false);
@@ -104,28 +104,31 @@ public:
 	int8_t playOK();
 	int8_t playCancel();
 	int8_t playTick();
-	
+
 	bool isPlaying(int8_t i);
+	bool isTunePlaying();
 	bool isSongPlaying();
 	bool isSongPaused();
 	bool isSongLooping();
-	
+
 	void update();
 	void mute();
 	void unmute();
 	bool isMute();
-	
+
 	void startEfxOnly();
 	void stopEfxOnly();
-	
+
 	void stop(int8_t i);
 	void stopSong();
-	
+
 	void setVolume(uint8_t volume);
 	uint8_t getVolume();
 
 	int getLevel();
 	int songProgressInSeconds();
+	int songPatternIndex();
+	int ticksPlayedInSongPattern();
 
 	uint32_t getPos(int8_t i);
 };
