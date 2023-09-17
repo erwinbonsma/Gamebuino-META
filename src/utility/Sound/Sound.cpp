@@ -491,7 +491,7 @@ extern "C" {
 #endif
 void Audio_Handler (void) __attribute__((optimize("-O3")));
 
-uint16_t flowdown = 0;
+int16_t flowdown = 0;
 
 void Audio_Handler (void) {
 	if (!globalVolume || muted) {
@@ -568,20 +568,17 @@ void Audio_Handler (void) {
 		if (flowdown < 512) {
 			flowdown++;
 		}
-		output += flowdown;
-		if (output < 0) {
-			output = 0;
-		}
-		analogWrite(A0, output);
+		output = min(flowdown, max(-flowdown, output));
 	} else {
 		// we need to output 0 when not in use to not have weird sound effects with the neoLeds as the interrupt isn't 100% constant there.
-		// however, jumping down from 512 (zero-positin) to 0 would give a plop
+		// however, jumping down from 512 (zero-position) to 0 would give a plop
 		// so instead we gradually decrease instead
-		analogWrite(A0, flowdown); // zero-position
 		if (flowdown > 0) {
 			flowdown--;
 		}
 	}
+
+	analogWrite(A0, output + flowdown);
 	TC5->COUNT16.INTFLAG.bit.MC0 = 1;
 }
 
