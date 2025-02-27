@@ -346,19 +346,19 @@ void Image::fillRect(int16_t x0, int16_t y0, int16_t w, int16_t h) {
     }
 }
 
-void Image::drawFastHLine(int16_t x, int16_t y, int16_t w) {
+void Image::drawFastHLine(int16_t x0, int16_t y, int16_t w) {
 	// Don't draw if we are outside the screen
-	if (x + w <= 0 || x >= _width || y < 0 || y >= _height) return;
-	
+	if (x0 + w <= 0 || x0 >= _width || y < 0 || y >= _height) return;
+
+    if (w < 0) {
+        x0 += w + 1;
+        w = -w;
+    }
+
 	if (colorMode == ColorMode::rgb565) {
-		if (w < 0) {
-			x += w + 1;
-			w = abs(w);
-		}
-		
 		// Clamp value so we don't go outside the buffer
-		uint16_t new_x = max(x,0);
-		uint32_t bound = new_x + min(w - (new_x - x),_width-new_x);
+		uint16_t new_x = max(x0, 0);
+		uint32_t bound = new_x + min(w - (new_x - x0),_width-new_x);
 
 		if (new_x%2 == 1){
 			_buffer[y * _width + new_x] = (uint16_t)color.c;
@@ -370,8 +370,31 @@ void Image::drawFastHLine(int16_t x, int16_t y, int16_t w) {
 			((uint32_t*)_buffer)[(y * (_width>>1)) + i] = ((uint16_t)color.c << 16) | (uint16_t)color.c;
 		}
 		return;
-	}
-	drawLine(x, y, x+w-1, y);
+	} else {
+        int16_t x = max(0, x0);
+        int16_t xmax = min(_width, x0 + w);
+        int16_t rowWidth = ((_width + 1) / 2);
+        uint8_t twoPixels = color.i | color.iu;
+        uint8_t* curP = (uint8_t *)_buffer + rowWidth * y + x / 2;
+
+        if (x % 2) {
+            // Left of line fills only half a byte
+            *curP &= 0xF0;
+            *curP |= color.i;
+            curP++;
+            x++;
+        }
+        while (x + 1 < xmax) {
+            *curP = twoPixels;
+            curP++;
+            x += 2;
+        }
+        if (x < xmax) {
+            // Right of line fills only half a byte
+            *curP &= 0x0F;
+			*curP |= color.iu;
+        }
+    }
 }
 
 void Image::drawFastVLine(int16_t x, int16_t y, int16_t h) {
@@ -388,13 +411,13 @@ void Image::drawFastVLine(int16_t x, int16_t y, int16_t h) {
         if (!(x % 2)) { // Odd pixels
             while (curP < maxP) {
                 *curP &= 0x0F;
-                *curP |= (uint8_t)color.iu;
+                *curP |= color.iu;
                 curP += rowWidth;
             }
         } else { // Even pixels
             while (curP < maxP) {
                 *curP &= 0xF0;
-                *curP |= (uint8_t)color.i;
+                *curP |= color.i;
                 curP += rowWidth;
             }
         }
