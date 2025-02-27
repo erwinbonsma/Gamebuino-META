@@ -307,6 +307,45 @@ Image::~Image() {
 	delete frame_handler;
 }
 
+void Image::fillRect(int16_t x0, int16_t y0, int16_t w, int16_t h) {
+    int16_t x = max(0, x0);
+    int16_t xmax = min(_width, x0 + w);
+    int16_t y = max(0, y0);
+    h = min(_height, y0 + h) - y;
+    if (h <= 0) return;
+
+    if (colorMode == ColorMode::index) {
+        int16_t rowWidth = ((_width + 1) / 2);
+        uint8_t twoPixels = color.i | color.iu;
+
+        if (x % 2 == 1 && x < xmax) {
+            // Left of rectangle fills only half a byte; draw it separately
+            drawFastVLine(x, y, h);
+            x++;
+        }
+        while (x + 1 < xmax) {
+            // Body of rectangle can be drawn two pixels at once
+            uint8_t* curP = (uint8_t *)_buffer + rowWidth * y + x / 2;
+            uint8_t* maxP = curP + rowWidth * h;
+            while (curP < maxP) {
+                *curP = twoPixels;
+                curP += rowWidth;
+            }
+
+            x += 2;
+        }
+        if (x < xmax) {
+            // Right of rectangle fills only half a byte; draw it separately
+            drawFastVLine(x, y, h);
+        }
+    } else {
+        while (x < xmax) {
+            drawFastVLine(x, y, h);
+            ++x;
+        }      
+    }
+}
+
 void Image::drawFastHLine(int16_t x, int16_t y, int16_t w) {
 	// Don't draw if we are outside the screen
 	if (x + w <= 0 || x >= _width || y < 0 || y >= _height) return;
