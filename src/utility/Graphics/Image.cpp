@@ -335,6 +335,37 @@ void Image::drawFastHLine(int16_t x, int16_t y, int16_t w) {
 	drawLine(x, y, x+w-1, y);
 }
 
+void Image::drawFastVLine(int16_t x, int16_t y, int16_t h) {
+    if (x < 0 || x >= _width) return;
+
+    if (colorMode == ColorMode::index) {
+        // Bound Y and H so that entire line is within the image
+        int16_t boundY = max(0, y);
+        int16_t boundH = min(_height, y + h) - boundY;
+
+        int16_t rowWidth = ((_width + 1) / 2);
+        uint8_t* curP = (uint8_t *)_buffer + rowWidth * boundY + x / 2;
+        uint8_t* maxP = curP + rowWidth * boundH;
+        if (!(x % 2)) { // Odd pixels
+            while (curP < maxP) {
+                *curP &= 0x0F;
+                *curP |= (uint8_t)color.iu;
+                curP += rowWidth;
+            }
+        } else { // Even pixels
+            while (curP < maxP) {
+                *curP &= 0xF0;
+                *curP |= (uint8_t)color.i;
+                curP += rowWidth;
+            }
+        }
+
+        return;
+    }
+    drawLine(x, y, x, y + h - 1);
+}
+
+
 uint16_t Image::getBufferSize() {
 	uint16_t bytes = 0;
 	if (colorMode == ColorMode::index) {

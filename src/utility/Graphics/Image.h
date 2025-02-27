@@ -90,8 +90,8 @@ public:
 	void init(uint16_t w, uint16_t h, char* filename, uint8_t fl = DEFAULT_FRAME_LOOP);
 	
 	void drawFastHLine(int16_t x, int16_t y, int16_t w) override __attribute__((optimize("-O3")));
+	void drawFastVLine(int16_t x, int16_t y, int16_t h) override __attribute__((optimize("-O3")));
 
-	
 	void nextFrame();
 	void setFrame(uint16_t frame);
 	void _drawPixel(int16_t x, int16_t y);
